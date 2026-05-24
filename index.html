@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LABORATORIUM — Particle Field Instrument №7</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
+<style>
+  :root {
+    --ink:        #0b0a09;
+    --ink-2:      #131210;
+    --paper:      #f4ecdc;
+    --paper-dim:  #c8c0b0;
+    --rule:       rgba(244, 236, 220, 0.18);
+    --rule-soft:  rgba(244, 236, 220, 0.08);
+    --amber:      #f0a046;
+    --amber-hot:  #ff6a2c;
+    --crimson:    #c83a3a;
+    --mint:       #6fd8b8;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--ink);
+    color: var(--paper);
+    font-family: 'JetBrains Mono', monospace;
+    overflow: hidden;
+    cursor: crosshair;
+  }
+
+  /* ——— Film-grain & vignette layer ——— */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.55) 100%),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.18 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    mix-blend-mode: overlay;
+    opacity: 0.55;
+    z-index: 50;
+  }
+
+  /* ——— Registration marks (corners) ——— */
+  .reg {
+    position: fixed;
+    width: 18px; height: 18px;
+    z-index: 40;
+    pointer-events: none;
+  }
+  .reg::before, .reg::after {
+    content: ''; position: absolute; background: var(--paper-dim);
+  }
+  .reg::before { left: 50%; top: 0; width: 1px; height: 100%; transform: translateX(-50%); }
+  .reg::after  { top: 50%; left: 0; height: 1px; width: 100%; transform: translateY(-50%); }
+  .reg.tl { top: 14px; left: 14px; }
+  .reg.tr { top: 14px; right: 14px; }
+  .reg.bl { bottom: 14px; left: 14px; }
+  .reg.br { bottom: 14px; right: 14px; }
+
+  /* ——— Canvas wrapper ——— */
+  #canvas-host {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+  }
+  canvas { display: block; }
+
+  /* ——— Brand block (top-left) ——— */
+  .brand {
+    position: fixed;
+    top: 32px; left: 44px;
+    z-index: 30;
+    pointer-events: none;
+    line-height: 1;
+  }
+  .brand .num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: var(--paper-dim);
+    margin-bottom: 14px;
+  }
+  .brand h1 {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: clamp(40px, 5.4vw, 76px);
+    letter-spacing: -0.02em;
+    line-height: 0.92;
+  }
+  .brand h1 .amp {
+    color: var(--amber);
+    font-style: italic;
+  }
+  .brand .sub {
+    margin-top: 14px;
+    font-size: 10px;
+    letter-spacing: 0.32em;
+    color: var(--paper-dim);
+    text-transform: uppercase;
+  }
+  .brand .sub::before {
+    content: '— ';
+    color: var(--amber);
+  }
+
+  /* ——— HUD (top-right) ——— */
+  .hud {
+    position: fixed;
+    top: 32px; right: 44px;
+    z-index: 30;
+    text-align: right;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    color: var(--paper-dim);
+    pointer-events: none;
+    text-transform: uppercase;
+  }
+  .hud .stat {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 14px;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .hud .stat .v {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-size: 22px;
+    color: var(--paper);
+    letter-spacing: -0.02em;
+  }
+  .hud .stat .v.amber { color: var(--amber); }
+
+  /* ——— Control panel (right side) ——— */
+  .panel {
+    position: fixed;
+    top: 50%;
+    right: 28px;
+    transform: translateY(-50%);
+    z-index: 30;
+    width: 296px;
+    max-height: calc(100vh - 220px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 22px 22px 26px;
+    background: rgba(11, 10, 9, 0.72);
+    backdrop-filter: blur(18px) saturate(120%);
+    -webkit-backdrop-filter: blur(18px) saturate(120%);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    box-shadow: 0 30px 60px -20px rgba(0,0,0,0.6),
+                inset 0 1px 0 rgba(244, 236, 220, 0.04);
+  }
+  .panel::-webkit-scrollbar { width: 4px; }
+  .panel::-webkit-scrollbar-track { background: transparent; }
+  .panel::-webkit-scrollbar-thumb { background: var(--rule); }
+
+  .panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 16px;
+  }
+  .panel-head .title {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+  }
+  .panel-head .title .dot {
+    color: var(--amber);
+  }
+  .panel-head .id {
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    color: var(--paper-dim);
+  }
+
+  .group {
+    margin-bottom: 18px;
+  }
+  .group-label {
+    font-size: 9px;
+    letter-spacing: 0.3em;
+    color: var(--paper-dim);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .group-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--rule-soft);
+  }
+
+  /* ——— Slider rows ——— */
+  .ctl {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 11px;
+    font-size: 11px;
+  }
+  .ctl label {
+    color: var(--paper);
+    letter-spacing: 0.04em;
+  }
+  .ctl .val {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    color: var(--amber);
+    font-size: 15px;
+    min-width: 38px;
+    text-align: right;
+    letter-spacing: -0.01em;
+  }
+  .ctl input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 18px;
+    background: transparent;
+    grid-column: 1 / -1;
+    margin-top: 2px;
+    cursor: ew-resize;
+  }
+  .ctl input[type="range"]::-webkit-slider-runnable-track {
+    height: 1px;
+    background: var(--rule);
+  }
+  .ctl input[type="range"]::-moz-range-track {
+    height: 1px;
+    background: var(--rule);
+  }
+  .ctl input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 11px; height: 11px;
+    background: var(--paper);
+    border-radius: 50%;
+    margin-top: -5px;
+    box-shadow: 0 0 0 1px var(--ink), 0 0 12px var(--amber);
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  .ctl input[type="range"]::-moz-range-thumb {
+    width: 11px; height: 11px;
+    background: var(--paper);
+    border: none;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px var(--ink), 0 0 12px var(--amber);
+  }
+  .ctl input[type="range"]:hover::-webkit-slider-thumb {
+    background: var(--amber);
+  }
+
+  /* ——— Chip rows (presets, modes, palettes) ——— */
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .chip {
+    flex: 1 0 calc(50% - 3px);
+    padding: 7px 8px;
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--paper-dim);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.18s ease;
+    border-radius: 1px;
+  }
+  .chip:hover {
+    border-color: var(--paper);
+    color: var(--paper);
+  }
+  .chip.active {
+    background: var(--amber);
+    border-color: var(--amber);
+    color: var(--ink);
+    font-weight: 500;
+  }
+  .chip.tri { flex: 1 0 calc(33.333% - 4px); }
+
+  /* ——— Palette swatches ——— */
+  .palettes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .palette {
+    cursor: pointer;
+    flex: 1 0 calc(33.333% - 4px);
+    height: 28px;
+    border: 1px solid var(--rule);
+    display: flex;
+    overflow: hidden;
+    border-radius: 1px;
+    transition: transform 0.2s, border-color 0.2s;
+  }
+  .palette:hover { transform: scale(1.04); border-color: var(--paper); }
+  .palette.active { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
+  .palette span {
+    flex: 1;
+  }
+
+  /* ——— Action buttons ——— */
+  .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--rule);
+    margin-top: 4px;
+  }
+  .btn {
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--paper);
+    padding: 9px 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.18s;
+    border-radius: 1px;
+  }
+  .btn:hover {
+    background: var(--paper);
+    color: var(--ink);
+  }
+  .btn.primary {
+    border-color: var(--amber);
+    color: var(--amber);
+  }
+  .btn.primary:hover {
+    background: var(--amber);
+    color: var(--ink);
+  }
+  .btn.danger:hover {
+    background: var(--crimson);
+    border-color: var(--crimson);
+    color: var(--paper);
+  }
+
+  /* ——— Toggle row ——— */
+  .toggles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  /* ——— Bottom status bar ——— */
+  .status {
+    position: fixed;
+    bottom: 28px;
+    left: 44px;
+    right: 44px;
+    z-index: 30;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    color: var(--paper-dim);
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+  .status .lhs { display: flex; gap: 32px; }
+  .status .rhs { display: flex; gap: 32px; align-items: baseline; }
+  .status .pulse {
+    display: inline-block;
+    width: 6px; height: 6px;
+    background: var(--amber);
+    border-radius: 50%;
+    margin-right: 8px;
+    box-shadow: 0 0 12px var(--amber);
+    animation: pulse 1.6s ease-in-out infinite;
+    vertical-align: middle;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.4; transform: scale(0.7); }
+  }
+  .status .field {
+    color: var(--paper);
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+    text-transform: none;
+  }
+  .status .ruler {
+    flex: 1;
+    height: 1px;
+    background: var(--rule-soft);
+    margin: 0 22px;
+    align-self: center;
+  }
+
+  /* ——— Hint pill (top center) ——— */
+  .hint {
+    position: fixed;
+    top: 32px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    padding: 8px 16px;
+    border: 1px solid var(--rule);
+    background: rgba(11, 10, 9, 0.6);
+    backdrop-filter: blur(12px);
+    border-radius: 99px;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    color: var(--paper-dim);
+    text-transform: uppercase;
+    pointer-events: none;
+    transition: opacity 0.6s;
+  }
+  .hint kbd {
+    display: inline-block;
+    padding: 2px 6px;
+    margin: 0 3px;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    color: var(--amber);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+  }
+
+  @media (max-width: 720px) {
+    .brand h1 { font-size: 36px; }
+    .panel { width: 240px; right: 14px; padding: 16px; }
+    .status { left: 18px; right: 18px; }
+    .brand { left: 18px; top: 18px; }
+    .hud { right: 18px; top: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="reg tl"></div>
+<div class="reg tr"></div>
+<div class="reg bl"></div>
+<div class="reg br"></div>
+
+<div id="canvas-host"></div>
+
+<header class="brand">
+  <div class="num">FILE №7 / 2D-PFI / REV.04</div>
+  <h1>Particle<br/><em class="amp">Field</em> Instrument</h1>
+  <div class="sub">A laboratory for synthetic motion</div>
+</header>
+
+<aside class="hud">
+  <div class="stat"><span>FRAMES</span><span class="v" id="hud-fps">60</span></div>
+  <div class="stat"><span>ENTITIES</span><span class="v amber" id="hud-count">0</span></div>
+  <div class="stat"><span>EMITTERS</span><span class="v" id="hud-emit">1</span></div>
+</aside>
+
+<div class="hint" id="hint">
+  <kbd>CLICK</kbd> burst &nbsp;·&nbsp; <kbd>DRAG</kbd> attract &nbsp;·&nbsp; <kbd>SPACE</kbd> pause &nbsp;·&nbsp; <kbd>R</kbd> reset
+</div>
+
+<aside class="panel">
+  <div class="panel-head">
+    <span class="title">Console<span class="dot">.</span></span>
+    <span class="id">CH-01</span>
+  </div>
+
+  <div class="group">
+    <div class="group-label">Preset</div>
+    <div class="chips" id="presets">
+      <button class="chip active" data-preset="fountain">Fountain</button>
+      <button class="chip" data-preset="vortex">Vortex</button>
+      <button class="chip" data-preset="fireworks">Fireworks</button>
+      <button class="chip" data-preset="snow">Snow</button>
+      <button class="chip" data-preset="fire">Fire</button>
+      <button class="chip" data-preset="smoke">Smoke</button>
+      <button class="chip" data-preset="galaxy">Galaxy</button>
+      <button class="chip" data-preset="constellation">Network</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="group-label">Emission</div>
+    <div class="ctl">
+      <label>Rate</label><span class="val" id="v-rate">12</span>
+      <input id="s-rate" type="range" min="1" max="80" value="12" />
+    </div>
+    <div class="ctl">
+      <label>Lifespan</label><span class="val" id="v-life">2.4s</span>
+      <input id="s-life" type="range" min="20" max="500" value="180" />
+    </div>
+    <div class="ctl">
+      <label>Size</label><span class="val" id="v-size">3.0</span>
+      <input id="s-size" type="range" min="1" max="120" value="30" />
+    </div>
+    <div class="ctl">
+      <label>Velocity</label><span class="val" id="v-vel">3.0</span>
+      <input id="s-vel" type="range" min="1" max="120" value="30" />
+    </div>
+    <div class="ctl">
+      <label>Spread</label><span class="val" id="v-spread">45°</span>
+      <input id="s-spread" type="range" min="0" max="360" value="45" />
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="group-label">Forces</div>
+    <div class="ctl">
+      <label>Gravity</label><span class="val" id="v-grav">+0.06</span>
+      <input id="s-grav" type="range" min="-50" max="50" value="6" />
+    </div>
+    <div class="ctl">
+      <label>Wind</label><span class="val" id="v-wind">0.00</span>
+      <input id="s-wind" type="range" min="-30" max="30" value="0" />
+    </div>
+    <div class="ctl">
+      <label>Turbulence</label><span class="val" id="v-turb">0.20</span>
+      <input id="s-turb" type="range" min="0" max="100" value="20" />
+    </div>
+    <div class="ctl">
+      <label>Damping</label><span class="val" id="v-damp">0.00</span>
+      <input id="s-damp" type="range" min="0" max="40" value="0" />
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="group-label">Render</div>
+    <div class="chips toggles" id="modes">
+      <button class="chip tri active" data-mode="dot">Dot</button>
+      <button class="chip tri" data-mode="trail">Trail</button>
+      <button class="chip tri" data-mode="network">Web</button>
+    </div>
+    <div class="ctl" style="margin-top:12px">
+      <label>Trail Decay</label><span class="val" id="v-decay">0.18</span>
+      <input id="s-decay" type="range" min="2" max="80" value="18" />
+    </div>
+    <div class="ctl">
+      <label>Glow</label><span class="val" id="v-glow">1.0</span>
+      <input id="s-glow" type="range" min="0" max="40" value="10" />
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="group-label">Palette</div>
+    <div class="palettes" id="palettes"></div>
+  </div>
+
+  <div class="actions">
+    <button class="btn primary" id="btn-pause">Pause</button>
+    <button class="btn" id="btn-shot">Capture</button>
+    <button class="btn danger" id="btn-reset">Clear</button>
+  </div>
+</aside>
+
+<footer class="status">
+  <div class="lhs">
+    <span><span class="pulse"></span>SIGNAL OK</span>
+    <span>MODE / <span class="field" id="st-mode">Fountain</span></span>
+  </div>
+  <div class="ruler"></div>
+  <div class="rhs">
+    <span>RUN <span class="field" id="st-run">00:00</span></span>
+    <span>CH-01 / 48 KHZ / NORM</span>
+  </div>
+</footer>
+
+<script src="sketch.js"></script>
+</body>
+</html>
