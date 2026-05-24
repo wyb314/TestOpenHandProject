@@ -2,6 +2,15 @@ import type p5 from 'p5';
 import { PALETTES } from './palettes';
 import type { PFIState } from './store';
 
+// ---- Safety caps ---------------------------------------------------------
+// Prevents the "performance death spiral": when a frame stalls (tab returns
+// from background, slow init, fonts loading, GC), deltaTime can balloon to
+// hundreds of ms and the spawn formula would inject a tidal wave of
+// particles, which slows the next frame, which makes deltaTime even bigger…
+// Ported from features/bugfix1 (sketch.js) into the Next.js engine.
+const MAX_DT = 50;          // ms — hard ceiling on per-frame spawn budget
+const MAX_PARTICLES = 1500; // hard ceiling on live particle count
+
 type GetState = () => PFIState;
 type SetStats = (fps: number, count: number) => void;
 
@@ -122,7 +131,9 @@ export function createEngine(
         const spawnBurst = (x: number, y: number, count = 80) => {
           const S = getState();
           const palette = PALETTES[S.palette];
-          for (let i = 0; i < count; i++) {
+          // Respect MAX_PARTICLES so a burst can't blow past the cap.
+          const budget = Math.min(count, MAX_PARTICLES - particles.length);
+          for (let i = 0; i < budget; i++) {
             const a = Math.random() * Math.PI * 2;
             const sp = (S.vel / 30) * (1.5 + Math.random() * 3);
             const c = palette[Math.floor(Math.random() * palette.length)];
@@ -175,6 +186,9 @@ export function createEngine(
             if (part.history.length < 2) continue;
             const a = part.ageRatio(p);
             const c = p.color(part.color);
+            // Reset shadow before drawing line segments so they don't inherit
+            // the glow set on the previous particle's circle (perf+visual bug).
+            ctx.shadowBlur = 0;
             for (let i = 1; i < part.history.length; i++) {
               const tt = i / part.history.length;
               c.setAlpha(255 * a * tt);
@@ -270,25 +284,31 @@ export function createEngine(
         p.setup = () => {
           const c = p.createCanvas(window.innerWidth, window.innerHeight);
           c.parent(container);
-          p.pixelDensity(Math.min(2, window.devicePixelRatio || 1));
+          // pixelDensity(1): on Retina/4K displays, pixelDensity(2) quadruples
+          // the backing-store pixels and makes per-particle shadowBlur (a
+          // software-rasterised Canvas2D op) crushingly slow. 1× looks
+          // ~identical here.
+          p.pixelDensity(1);
           p.background(11, 10, 9);
         };
 
         p.draw = () => {
           const S = getState();
           t += 0.003;
+          // Clamp deltaTime to break the death-spiral feedback loop (MAX_DT).
+          const dt = Math.min(p.deltaTime, MAX_DT);
 
           // Background trail (motion blur)
           p.noStroke();
           p.fill(11, 10, 9, 4 + S.decay * 0.6);
           p.rect(0, 0, p.width, p.height);
 
-          // Spawn
-          if (!S.paused) {
+          // Spawn (clamped against the death-spiral and population cap)
+          if (!S.paused && particles.length < MAX_PARTICLES) {
             const sources = currentEmitterPositions();
             for (const [sx, sy] of sources) {
               const rate = S.rate * (1 / sources.length);
-              const r = rate * (p.deltaTime / 16.6);
+              const r = rate * (dt / 16.6);
               const intR = Math.floor(r);
               const frac = r - intR;
               const n = intR + (Math.random() < frac ? 1 : 0);
@@ -299,14 +319,16 @@ export function createEngine(
                   60,
                 );
               } else {
-                for (let i = 0; i < n; i++) spawnFromState(sx, sy);
+                // Per-source budget — re-checks population because earlier
+                // sources in this frame may have already neared the cap.
+                const budget = Math.min(n, MAX_PARTICLES - particles.length);
+                for (let i = 0; i < budget; i++) spawnFromState(sx, sy);
               }
             }
           }
 
           // Update
           if (!S.paused) {
-            const dt = p.deltaTime;
             for (let i = particles.length - 1; i >= 0; i--) {
               const part = particles[i];
               part.update(p, S, dt, t);
