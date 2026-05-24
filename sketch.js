@@ -2,6 +2,14 @@
    PARTICLE FIELD INSTRUMENT — engine
    =========================================================== */
 
+// ---- Safety caps ---------------------------------------------------------
+// Prevents the "performance death spiral": when a frame stalls (tab returns
+// from background, slow init, fonts loading, GC), deltaTime can balloon to
+// hundreds of ms and the spawn formula would inject a tidal wave of
+// particles, which slows the next frame, which makes deltaTime even bigger…
+const MAX_DT = 50;          // ms — hard ceiling on per-frame spawn budget
+const MAX_PARTICLES = 1500; // hard ceiling on live particle count
+
 // ---- Colour palettes -----------------------------------------------------
 const PALETTES = {
   ember:    ['#ffd166', '#f09236', '#e0451f', '#a31621', '#fef6c8'],
@@ -34,7 +42,6 @@ const S = {
   decay: 18, glow: 10, dir: -90,
   preset: 'fountain', burst: false, spiral: false, source: 'emitter',
   paused: false,
-  emitters: [],            // user-added emitters
   mouse: { x: 0, y: 0, down: false, button: 0 },
   startTs: Date.now()
 };
@@ -122,7 +129,8 @@ function spawnFromPreset(srcX, srcY) {
 
 function spawnBurst(x, y, count = 80) {
   const palette = PALETTES[S.palette];
-  for (let i = 0; i < count; i++) {
+  const budget = Math.min(count, MAX_PARTICLES - particles.length);
+  for (let i = 0; i < budget; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = (S.vel / 30) * (1.5 + Math.random() * 3);
     const c = palette[Math.floor(Math.random() * palette.length)];
@@ -140,7 +148,10 @@ function setup() {
   const host = document.getElementById('canvas-host');
   canvasEl = createCanvas(window.innerWidth, window.innerHeight);
   canvasEl.parent(host);
-  pixelDensity(Math.min(2, window.devicePixelRatio || 1));
+  // pixelDensity(1): on Retina/4K displays, pixelDensity(2) quadruples the
+  // backing-store pixels and makes per-particle shadowBlur (a software-
+  // rasterised Canvas2D op) crushingly slow. 1× looks ~identical here.
+  pixelDensity(1);
   background(11, 10, 9);
   runStartTs = Date.now();
   buildPaletteUI();
@@ -163,22 +174,21 @@ function draw() {
   fill(11, 10, 9, 4 + S.decay * 0.6);
   rect(0, 0, width, height);
 
-  // Spawn from default emitter
-  if (!S.paused) {
-    const sources = currentEmitterPositions();
-    for (const [sx, sy] of sources) {
-      const rate = S.rate * (1 / sources.length);
-      const r = rate * (deltaTime / 16.6);
-      const intR = Math.floor(r);
-      const frac = r - intR;
-      let n = intR + (Math.random() < frac ? 1 : 0);
-      // Fireworks: occasional bursts
-      if (S.burst && Math.random() < 0.012 * (S.rate / 6)) {
-        spawnBurst(random(width * 0.15, width * 0.85),
-                   random(height * 0.2, height * 0.7), 60);
-      } else {
-        for (let i = 0; i < n; i++) spawnFromPreset(sx, sy);
-      }
+  // Spawn from the single emitter (clamped against the death-spiral)
+  if (!S.paused && particles.length < MAX_PARTICLES) {
+    const [sx, sy] = currentEmitterPosition();
+    const dt = Math.min(deltaTime, MAX_DT);
+    const r = S.rate * (dt / 16.6);
+    const intR = Math.floor(r);
+    const frac = r - intR;
+    const n = intR + (Math.random() < frac ? 1 : 0);
+    // Fireworks: occasional bursts
+    if (S.burst && Math.random() < 0.012 * (S.rate / 6)) {
+      spawnBurst(random(width * 0.15, width * 0.85),
+                 random(height * 0.2, height * 0.7), 60);
+    } else {
+      const budget = Math.min(n, MAX_PARTICLES - particles.length);
+      for (let i = 0; i < budget; i++) spawnFromPreset(sx, sy);
     }
   }
 
@@ -211,20 +221,13 @@ function draw() {
   updateHud();
 }
 
-function currentEmitterPositions() {
-  const list = [];
-  if (S.source === 'top') {
-    // Snow: spawn across top
-    list.push([random(width), -10]);
-  } else if (S.spiral) {
-    list.push([width / 2, height / 2]);
-  } else if (S.preset === 'fire' || S.preset === 'smoke' || S.preset === 'fountain') {
-    list.push([width / 2, height - 60]);
-  } else {
-    list.push([width / 2, height / 2]);
-  }
-  for (const e of S.emitters) list.push([e.x, e.y]);
-  return list;
+// The single, global emitter — its position is dictated by the active preset.
+function currentEmitterPosition() {
+  if (S.source === 'top')        return [random(width), -10];           // snow
+  if (S.preset === 'fire' ||
+      S.preset === 'smoke' ||
+      S.preset === 'fountain')   return [width / 2, height - 60];       // bottom
+  return [width / 2, height / 2];                                       // center
 }
 
 // ---- Renderers -----------------------------------------------------------
@@ -253,6 +256,9 @@ function drawTrails() {
     if (p.history.length < 2) continue;
     const a = p.ageRatio();
     const c = color(p.color);
+    // Reset shadow before drawing line segments so they don't inherit
+    // the glow set on the previous particle's circle (was a perf+visual bug).
+    drawingContext.shadowBlur = 0;
     for (let i = 1; i < p.history.length; i++) {
       const t = i / p.history.length;
       c.setAlpha(255 * a * t);
@@ -525,7 +531,8 @@ function capture() {
 // ---- HUD -----------------------------------------------------------------
 function updateHud() {
   document.getElementById('hud-fps').textContent = Math.round(frameRate());
-  document.getElementById('hud-count').textContent = particles.length;
+  document.getElementById('hud-count').textContent =
+    particles.length + (particles.length >= MAX_PARTICLES ? '⚠' : '');
   const elapsed = Math.floor((Date.now() - runStartTs) / 1000);
   const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const ss = String(elapsed % 60).padStart(2, '0');
